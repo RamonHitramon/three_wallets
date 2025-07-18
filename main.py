@@ -23,9 +23,15 @@ def extract_token_address(lines):
 
 def insert_links(lines, token_address):
     links = f"| [GMGN](https://gmgn.ai/sol/token/{token_address}) | [DexScreener](https://dexscreener.com/solana/{token_address}) | [AXIOM](https://axiom.trade/t/{token_address}/@3wallets) |"
+    # 1. Вставить после строки 💧 Total Liquidity (без учёта пробелов)
     for i, line in enumerate(lines):
-        if "💧 Total Liquidity" in line:
+        if "Total Liquidity" in line:
             return lines[:i+1] + ["", links, ""] + lines[i+1:]
+    # 2. Если не нашли — вставить после смарт-контракта (CA)
+    for i, line in enumerate(lines):
+        if line.startswith("`") and line.endswith("`"):
+            return lines[:i+1] + ["", links, ""] + lines[i+1:]
+    # 3. Если не нашли и это, просто добавить в конец блока токена
     return lines + ["", links, ""]
 
 def clean_message(text):
@@ -69,18 +75,17 @@ def clean_message(text):
     token_address = extract_token_address(token_block)
     if token_address:
         token_block = insert_links(token_block, token_address)
-    # Добавляем Smart Money Transactions
+    # Smart Money Transactions
     result = token_block
     smt_idx = next((i for i, l in enumerate(lines) if "Smart Money Transactions:" in l), None)
     if smt_idx is not None:
         smt_block = lines[smt_idx:]
         formatted_smt = []
         for l in smt_block:
-            # [View Tx] markdown
-            tx_url = re.search(r'$begin:math:display$View Tx$end:math:display$\s*(https?://[^\s\)]+)', l)
+            tx_url = re.search(r'\[View Tx\]\s*(https?://[^\s\)]+)', l)
             if tx_url:
                 url = tx_url.group(1)
-                l = re.sub(r'$begin:math:display$View Tx$end:math:display$\s*https?://[^\s\)]+', f'[View Tx]({url})', l)
+                l = re.sub(r'\[View Tx\]\s*https?://[^\s\)]+', f'[View Tx]({url})', l)
             else:
                 m2 = re.search(r'(https?://[^\s\)]+)', l)
                 if m2:
