@@ -8,96 +8,88 @@ session_name = 'forwarder'
 tag_to_chat = {
     "3w500s1h": "@three_wallets_500",
     "3w1000s2h": "@three_wallets_1000",
-    "3wvedao": 2524347290 
-    # Добавь сюда при необходимости свой приватный id, например:
-    # "3wXXXXXX": -1001234567890,
+    "3wvedao": -2524347290,
 }
 
 client = TelegramClient(session_name, api_id, api_hash)
 
+def extract_token_address(lines):
+    for i, line in enumerate(lines):
+        if line.strip().startswith("➡"):
+            if i+1 < len(lines):
+                return lines[i+1].replace("✂", "").strip()
+    return None
+
+def insert_links(lines, token_address):
+    links = f"[GMGN](https://gmgn.ai/sol/token/{token_address}) [DexScreener](https://dexscreener.com/solana/{token_address}) [AXIOM](https://axiom.trade/t/{token_address}/@3wallets)"
+    for i, line in enumerate(lines):
+        if "💧 Total Liquidity" in line:
+            # Вставляем ссылки СРАЗУ ПОСЛЕ строки с ликвидностью
+            return lines[:i+1] + ["", links, ""] + lines[i+1:]
+    # Если не нашёлся маркер, просто добавим в конец блока токена
+    return lines + ["", links, ""]
+
+def clean_message(text):
+    lines = text.splitlines()
+    # Убираем Alert Count, # "...", Time, Transactions within, пустые строки в начале
+    while lines and (lines[0].startswith("Alert Count:") or lines[0].startswith("# ") or lines[0].startswith("Time") or lines[0].startswith("Transactions within") or lines[0].strip() == ""):
+        lines.pop(0)
+    # Найти начало блока (строка с ➡)
+    start_idx = next((i for i, l in enumerate(lines) if l.strip().startswith('➡')), 0)
+    # Найти конец блока — строка перед первой "Smart Money Transactions:"
+    end_idx = next((i for i, l in enumerate(lines) if "Smart Money Transactions:" in l), len(lines))
+    token_block = lines[start_idx:end_idx]
+    # Удаляем ✂
+    token_block = [l.replace("✂", "") for l in token_block]
+    token_address = extract_token_address(token_block)
+    # Удаляем всё после 💧 Total Liquidity (оставляем саму строку)
+    if token_address:
+        token_block = [l for l in token_block if not re.search(r"\[DexScreener]", l) and "[chainEDGE]" not in l and "[Twitter]" not in l and "[Website]" not in l and "GMGN" not in l]
+        token_block = insert_links(token_block, token_address)
+    # Парсим и очищаем блок Smart Money Transactions (оставить как есть, но обработать ссылки)
+    smt_idx = next((i for i, l in enumerate(lines) if "Smart Money Transactions:" in l), None)
+    result = token_block
+    if smt_idx is not None:
+        smt_block = lines[smt_idx:]
+        # заменяем [View Tx] на markdown-ссылки если они есть в строке
+        for idx, l in enumerate(smt_block):
+            # Проверяем наличие ссылки на Solscan
+            tx_link = re.search(r'\[View Tx\](?:\((https?://[^\)]+)\))?', l)
+            if tx_link:
+                url = tx_link.group(1)
+                if not url:
+                    # Парсим ссылку после View Tx, если есть
+                    url_search = re.search(r'(https?://[^\s]+)', l)
+                    url = url_search.group(1) if url_search else None
+                if url:
+                    l = re.sub(r'\[View Tx\].*?(https?://[^\s\)]+)?', f'[View Tx]({url})', l)
+                else:
+                    l = '[View Tx]'
+            smt_block[idx] = l.replace('✂', '').strip()
+        result += smt_block
+    # Убираем повторяющиеся пустые строки
+    clean_result = []
+    for line in result:
+        if not (clean_result and clean_result[-1] == "" and line == ""):
+            clean_result.append(line)
+    return '\n'.join(clean_result).strip()
+
 @client.on(events.NewMessage(from_users='chainedge_solbot'))
 async def handle_message(event):
     text = event.message.message
-
-    # Найти тег в заголовке сообщения
-    tag_match = re.search(r'#\s*"?(3w\d+s\d+h)"?', text)
+    tag_match = re.search(r'#\s*"?(3w\w+)"?', text)
     if not tag_match:
         print("⛔ Тег не найден — сообщение пропущено.")
         return
-
     tag = tag_match.group(1)
     target_chat = tag_to_chat.get(tag)
-
     if not target_chat:
         print(f"⛔ Нет канала для тэга #{tag}. Проверь tag_to_chat.")
         return
+    cleaned_message = clean_message(text)
+    await client.send_message(target_chat, cleaned_message, parse_mode="markdown")
+    print(f"✅ Отправлено в {target_chat} по тегу #{tag}")
 
-    parts = text.split("\n")
-    try:
-        # Найти начало блока (строка с ➡)
-        start_idx = next(i for i, line in enumerate(parts) if line.strip().startswith("➡"))
-        # Найти конец блока (последняя строка с [View Tx])
-        end_idx = max(i for i, line in enumerate(parts) if "[View Tx]" in line) + 1
-        filtered_lines = parts[start_idx:end_idx]
-
-        # --- Убрать смайлик ✂ в строке с адресом токена ---
-        if len(filtered_lines) > 1:
-            address_line = filtered_lines[1].replace("✂", "").strip()
-            # оформить в виде моноширного кода
-            filtered_lines[1] = f"`{address_line}`"
-
-        # --- Преобразовать [View Tx] в кликабельную ссылку, если она есть ---
-        entities = event.message.entities or []
-        urls_by_offset = {}
-        for entity in entities:
-            if hasattr(entity, 'url') and hasattr(entity, 'offset') and hasattr(entity, 'length'):
-                urls_by_offset[entity.offset] = (entity.length, entity.url)
-
-        def insert_links(line, offset_start):
-            result = ""
-            i = 0
-            while i < len(line):
-                global_offset = offset_start + i
-                if global_offset in urls_by_offset:
-                    length, url = urls_by_offset[global_offset]
-                    text = line[i:i+length]
-                    result += f"[{text}]({url})"
-                    i += length
-                else:
-                    result += line[i]
-                    i += 1
-            return result
-
-        # Перебираем строки и делаем [View Tx] кликабельным, если возможно
-        offset = sum(len(x)+1 for x in parts[:start_idx])
-        new_filtered_lines = []
-        for line in filtered_lines:
-            new_filtered_lines.append(insert_links(line, offset))
-            offset += len(line) + 1
-        filtered_lines = new_filtered_lines
-
-        # --- DexScreener: оставить только его ---
-        dex_idx = next((i for i, line in enumerate(parts) if "[DexScreener]" in line), None)
-        dex_line = ""
-        if dex_idx is not None:
-            # вырезаем только [DexScreener]
-            dex_line = "[DexScreener]"
-            filtered_lines.append(dex_line)
-
-        # --- Добавить ссылку на GMGN ---
-        if len(filtered_lines) > 1:
-            token_address = filtered_lines[1].replace("`", "")
-            gmgn_link = f"[GMGN](https://gmgn.ai/sol/token/{token_address})"
-            filtered_lines.append(gmgn_link)
-
-        cleaned_message = "\n".join(filtered_lines).strip()
-        await client.send_message(target_chat, cleaned_message, parse_mode='markdown')
-        print(f"✅ Отправлено в {target_chat} по тегу #{tag}")
-
-    except Exception as e:
-        print("⚠ Ошибка обработки сообщения:", e)
-
-# Для поиска id приватного чата — просто жди любое сообщение и посмотри в консоль
 @client.on(events.NewMessage)
 async def print_chat_info(event):
     sender = await event.get_chat()
