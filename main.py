@@ -1,18 +1,3 @@
-from telethon import TelegramClient, events
-import re
-
-api_id = 23254800
-api_hash = 'beed8ffad73a37683a059ee31b6d92f2'
-session_name = 'forwarder'
-
-tag_to_chat = {
-    "3w500s1h": "@three_wallets_500",
-    "3w1000s2h": "@three_wallets_1000",
-    # Добавь приватные чаты, если нужно
-}
-
-client = TelegramClient(session_name, api_id, api_hash)
-
 @client.on(events.NewMessage(from_users='chainedge_solbot'))
 async def handle_message(event):
     text = event.message.message
@@ -31,29 +16,56 @@ async def handle_message(event):
 
     parts = text.split("\n")
     try:
-        # Найти начало блока (строка с ➡)
         start_idx = next(i for i, line in enumerate(parts) if line.strip().startswith("➡"))
-        # Найти конец блока (последняя строка с [View Tx])
         end_idx = max(i for i, line in enumerate(parts) if "[View Tx]" in line) + 1
         filtered_lines = parts[start_idx:end_idx]
 
-        # Найти строку с адресом токена (обычно сразу после ➡)
+        # --- Копируем строку токена (без ✂) ---
         token_line_idx = start_idx + 1
-        token_address = parts[token_line_idx].strip() if len(parts) > token_line_idx else ""
-
-        # Заменить строку токена на моноширный формат
+        token_address_raw = parts[token_line_idx].strip() if len(parts) > token_line_idx else ""
+        token_address = token_address_raw.replace("✂", "").strip()
         if token_address:
-            filtered_lines[1] = f"`{token_address}`"  # Оформить как код-блок
+            filtered_lines[1] = f"`{token_address}`"
 
-        # Вырезать все строки после [DexScreener], оставить только её
+        # --- Восстановление кликабельных ссылок для всех [View Tx] ---
+        entities = event.message.entities or []
+        urls_by_offset = {}
+        for entity in entities:
+            if hasattr(entity, 'url') and hasattr(entity, 'offset') and hasattr(entity, 'length'):
+                urls_by_offset[entity.offset] = (entity.length, entity.url)
+
+        def insert_links(line, offset_start):
+            # Проверка всех сущностей в строке
+            result = ""
+            i = 0
+            while i < len(line):
+                global_offset = offset_start + i
+                if global_offset in urls_by_offset:
+                    length, url = urls_by_offset[global_offset]
+                    text = line[i:i+length]
+                    result += f"[{text}]({url})"
+                    i += length
+                else:
+                    result += line[i]
+                    i += 1
+            return result
+
+        # Перебираем все строки между start_idx и end_idx и делаем ссылки кликабельными
+        offset = sum(len(x)+1 for x in parts[:start_idx])  # смещение относительно оригинального текста
+        new_filtered_lines = []
+        for line in filtered_lines:
+            new_filtered_lines.append(insert_links(line, offset))
+            offset += len(line) + 1
+
+        filtered_lines = new_filtered_lines
+
+        # --- DexScreener ---
         dex_idx = next((i for i, line in enumerate(parts) if "[DexScreener]" in line), None)
-        dex_line = parts[dex_idx] if dex_idx is not None else ""
-        # Убрать всё, что после [DexScreener]
+        dex_line = parts[dex_idx].split('|')[0].strip() + ' [DexScreener]' if dex_idx is not None else ""
         if dex_idx is not None:
-            # Оставляем только [DexScreener]
             filtered_lines.append(dex_line)
 
-        # Добавить ссылку GMGN на токен (если нашли токен)
+        # --- GMGN ---
         if token_address:
             gmgn_link = f"[GMGN](https://gmgn.ai/sol/token/{token_address})"
             filtered_lines.append(gmgn_link)
@@ -64,7 +76,3 @@ async def handle_message(event):
 
     except Exception as e:
         print("⚠ Ошибка обработки сообщения:", e)
-
-print("📡 Бот запущен. Ожидаем сообщения от @chainedge_solbot...")
-client.start()
-client.run_until_disconnected()
