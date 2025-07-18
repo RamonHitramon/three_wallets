@@ -8,6 +8,7 @@ session_name = 'forwarder'
 tag_to_chat = {
     "3w500s1h": "@three_wallets_500",
     "3w1000s2h": "@three_wallets_1000",
+    "3wvedao": 2524347290 
     # Добавь сюда при необходимости свой приватный id, например:
     # "3wXXXXXX": -1001234567890,
 }
