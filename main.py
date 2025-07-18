@@ -16,58 +16,64 @@ client = TelegramClient(session_name, api_id, api_hash)
 def extract_token_address(lines):
     for i, line in enumerate(lines):
         if line.strip().startswith("➡"):
+            # Следующая строка (где контракт) — только латиница/цифры без лишнего
             if i+1 < len(lines):
-                return lines[i+1].replace("✂", "").strip()
+                ca = lines[i+1].replace("✂", "").strip()
+                ca = re.sub(r'[^\w\d]+', '', ca)  # только буквы и цифры, без пробелов
+                return ca
     return None
 
 def insert_links(lines, token_address):
     links = f"[GMGN](https://gmgn.ai/sol/token/{token_address}) [DexScreener](https://dexscreener.com/solana/{token_address}) [AXIOM](https://axiom.trade/t/{token_address}/@3wallets)"
     for i, line in enumerate(lines):
         if "💧 Total Liquidity" in line:
-            # Вставляем ссылки СРАЗУ ПОСЛЕ строки с ликвидностью
+            # Вставить ссылки сразу после этой строки
             return lines[:i+1] + ["", links, ""] + lines[i+1:]
-    # Если не нашёлся маркер, просто добавим в конец блока токена
     return lines + ["", links, ""]
 
 def clean_message(text):
     lines = text.splitlines()
-    # Убираем Alert Count, # "...", Time, Transactions within, пустые строки в начале
+    # Убираем мусор сверху
     while lines and (lines[0].startswith("Alert Count:") or lines[0].startswith("# ") or lines[0].startswith("Time") or lines[0].startswith("Transactions within") or lines[0].strip() == ""):
         lines.pop(0)
-    # Найти начало блока (строка с ➡)
+    # Находим ➡
     start_idx = next((i for i, l in enumerate(lines) if l.strip().startswith('➡')), 0)
-    # Найти конец блока — строка перед первой "Smart Money Transactions:"
+    # Блок токена — до Smart Money Transactions
     end_idx = next((i for i, l in enumerate(lines) if "Smart Money Transactions:" in l), len(lines))
     token_block = lines[start_idx:end_idx]
-    # Удаляем ✂
+    # Контракт (строка под ➡) — очищаем спецсимволы, только копируемый текст!
     token_block = [l.replace("✂", "") for l in token_block]
     token_address = extract_token_address(token_block)
-    # Удаляем всё после 💧 Total Liquidity (оставляем саму строку)
+    # Оставляем только верхнюю часть до ссылок/мусора
     if token_address:
         token_block = [l for l in token_block if not re.search(r"\[DexScreener]", l) and "[chainEDGE]" not in l and "[Twitter]" not in l and "[Website]" not in l and "GMGN" not in l]
         token_block = insert_links(token_block, token_address)
-    # Парсим и очищаем блок Smart Money Transactions (оставить как есть, но обработать ссылки)
+    # Парсим Smart Money Transactions
     smt_idx = next((i for i, l in enumerate(lines) if "Smart Money Transactions:" in l), None)
     result = token_block
     if smt_idx is not None:
         smt_block = lines[smt_idx:]
-        # заменяем [View Tx] на markdown-ссылки если они есть в строке
+        # [View Tx] -> [View Tx](URL)
         for idx, l in enumerate(smt_block):
-            # Проверяем наличие ссылки на Solscan
-            tx_link = re.search(r'\[View Tx\](?:\((https?://[^\)]+)\))?', l)
-            if tx_link:
-                url = tx_link.group(1)
-                if not url:
-                    # Парсим ссылку после View Tx, если есть
-                    url_search = re.search(r'(https?://[^\s]+)', l)
-                    url = url_search.group(1) if url_search else None
-                if url:
-                    l = re.sub(r'\[View Tx\].*?(https?://[^\s\)]+)?', f'[View Tx]({url})', l)
+            # Если уже есть [View Tx](...), ничего не делаем
+            if re.search(r'\[View Tx\]\(https?://', l):
+                pass
+            # Если [View Tx] и отдельно где-то ссылка — собираем
+            elif '[View Tx]' in l:
+                # Пробуем найти ссылку после [View Tx]
+                m = re.search(r'\[View Tx\]\s*(https?://[^\s\)]+)', l)
+                if m:
+                    url = m.group(1)
+                    l = re.sub(r'\[View Tx\]\s*https?://[^\s\)]+', f'[View Tx]({url})', l)
                 else:
-                    l = '[View Tx]'
+                    # Если ссылка где-то ещё, подцепить первую подходящую
+                    m2 = re.search(r'(https?://[^\s\)]+)', l)
+                    if m2:
+                        url = m2.group(1)
+                        l = l.replace('[View Tx]', f'[View Tx]({url})')
             smt_block[idx] = l.replace('✂', '').strip()
         result += smt_block
-    # Убираем повторяющиеся пустые строки
+    # Убираем двойные пустые строки
     clean_result = []
     for line in result:
         if not (clean_result and clean_result[-1] == "" and line == ""):
