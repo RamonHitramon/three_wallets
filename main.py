@@ -16,69 +16,84 @@ client = TelegramClient(session_name, api_id, api_hash)
 def extract_token_address(lines):
     for i, line in enumerate(lines):
         if line.strip().startswith("➡"):
-            # Следующая строка (где контракт) — только латиница/цифры без лишнего
             if i+1 < len(lines):
                 ca = lines[i+1].replace("✂", "").strip()
-                ca = re.sub(r'[^\w\d]+', '', ca)  # только буквы и цифры, без пробелов
                 return ca
     return None
 
 def insert_links(lines, token_address):
-    links = f"[GMGN](https://gmgn.ai/sol/token/{token_address}) [DexScreener](https://dexscreener.com/solana/{token_address}) [AXIOM](https://axiom.trade/t/{token_address}/@3wallets)"
+    links = f"| [GMGN](https://gmgn.ai/sol/token/{token_address}) | [DexScreener](https://dexscreener.com/solana/{token_address}) | [AXIOM](https://axiom.trade/t/{token_address}/@3wallets) |"
     for i, line in enumerate(lines):
         if "💧 Total Liquidity" in line:
-            # Вставить ссылки сразу после этой строки
             return lines[:i+1] + ["", links, ""] + lines[i+1:]
     return lines + ["", links, ""]
 
 def clean_message(text):
     lines = text.splitlines()
-    # Убираем мусор сверху
-    while lines and (lines[0].startswith("Alert Count:") or lines[0].startswith("# ") or lines[0].startswith("Time") or lines[0].startswith("Transactions within") or lines[0].strip() == ""):
-        lines.pop(0)
-    # Находим ➡
+    result = []
+    skip_patterns = [
+        "Alert Count:",
+        "# ",
+        "Time",
+        "Transactions within",
+        "[DexScreener]",
+        "[chainEDGE]",
+        "[Telegram]",
+        "[Twitter]",
+        "[Website]",
+        "GMGN",
+        "DexScreener",
+        "AXIOM"
+    ]
+    # Убираем строки с процентами 1H ... 12H ... 24H ...
+    lines = [l for l in lines if not (("1H:" in l and "12H:" in l and "24H:" in l) or any(spat in l for spat in skip_patterns))]
+    # Оставляем только одну пустую строку подряд
+    prev_empty = False
+    compact_lines = []
+    for l in lines:
+        if l.strip() == "":
+            if not prev_empty:
+                compact_lines.append("")
+            prev_empty = True
+        else:
+            compact_lines.append(l)
+            prev_empty = False
+    lines = compact_lines
+    # Найти начало блока (строка с ➡)
     start_idx = next((i for i, l in enumerate(lines) if l.strip().startswith('➡')), 0)
-    # Блок токена — до Smart Money Transactions
     end_idx = next((i for i, l in enumerate(lines) if "Smart Money Transactions:" in l), len(lines))
     token_block = lines[start_idx:end_idx]
-    # Контракт (строка под ➡) — очищаем спецсимволы, только копируемый текст!
+    # Удаляем ✂
     token_block = [l.replace("✂", "") for l in token_block]
+    # Добавить пустую строку после токена и CA, CA — моноширинный!
+    if len(token_block) >= 2:
+        token_block = [token_block[0], f"`{token_block[1].strip()}`", ""] + token_block[2:]
     token_address = extract_token_address(token_block)
-    # Оставляем только верхнюю часть до ссылок/мусора
+    # Вставить блок ссылок
     if token_address:
-        token_block = [l for l in token_block if not re.search(r"\[DexScreener]", l) and "[chainEDGE]" not in l and "[Twitter]" not in l and "[Website]" not in l and "GMGN" not in l]
         token_block = insert_links(token_block, token_address)
-    # Парсим Smart Money Transactions
+    result += token_block
+    # Smart Money Transactions блок
     smt_idx = next((i for i, l in enumerate(lines) if "Smart Money Transactions:" in l), None)
-    result = token_block
     if smt_idx is not None:
         smt_block = lines[smt_idx:]
-        # [View Tx] -> [View Tx](URL)
+        # Markdown View Tx
         for idx, l in enumerate(smt_block):
-            # Если уже есть [View Tx](...), ничего не делаем
-            if re.search(r'\[View Tx\]\(https?://', l):
-                pass
-            # Если [View Tx] и отдельно где-то ссылка — собираем
-            elif '[View Tx]' in l:
-                # Пробуем найти ссылку после [View Tx]
-                m = re.search(r'\[View Tx\]\s*(https?://[^\s\)]+)', l)
-                if m:
-                    url = m.group(1)
-                    l = re.sub(r'\[View Tx\]\s*https?://[^\s\)]+', f'[View Tx]({url})', l)
-                else:
-                    # Если ссылка где-то ещё, подцепить первую подходящую
-                    m2 = re.search(r'(https?://[^\s\)]+)', l)
-                    if m2:
-                        url = m2.group(1)
-                        l = l.replace('[View Tx]', f'[View Tx]({url})')
+            tx_url = re.search(r'\[View Tx\]\s*(https?://[^\s\)]+)', l)
+            if tx_url:
+                url = tx_url.group(1)
+                l = re.sub(r'\[View Tx\]\s*https?://[^\s\)]+', f'[View Tx]({url})', l)
+            else:
+                m2 = re.search(r'(https?://[^\s\)]+)', l)
+                if m2:
+                    url = m2.group(1)
+                    l = l.replace('[View Tx]', f'[View Tx]({url})')
             smt_block[idx] = l.replace('✂', '').strip()
         result += smt_block
-    # Убираем двойные пустые строки
-    clean_result = []
-    for line in result:
-        if not (clean_result and clean_result[-1] == "" and line == ""):
-            clean_result.append(line)
-    return '\n'.join(clean_result).strip()
+    # Убираем лишние пустые строки в конце
+    while result and result[-1] == "":
+        result.pop()
+    return '\n'.join(result).strip()
 
 @client.on(events.NewMessage(from_users='chainedge_solbot'))
 async def handle_message(event):
