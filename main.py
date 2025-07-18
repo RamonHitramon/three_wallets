@@ -23,16 +23,14 @@ def extract_token_address(lines):
 
 def insert_links(lines, token_address):
     links = f"| [GMGN](https://gmgn.ai/sol/token/{token_address}) | [DexScreener](https://dexscreener.com/solana/{token_address}) | [AXIOM](https://axiom.trade/t/{token_address}/@3wallets) |"
-    # 1. Вставить после строки 💧 Total Liquidity (без учёта пробелов)
+    # после строки 💧 Total Liquidity или после CA
     for i, line in enumerate(lines):
         if "Total Liquidity" in line:
-            return lines[:i+1] + ["", links, ""] + lines[i+1:]
-    # 2. Если не нашли — вставить после смарт-контракта (CA)
+            return lines[:i+1] + [links] + lines[i+1:]
     for i, line in enumerate(lines):
         if line.startswith("`") and line.endswith("`"):
-            return lines[:i+1] + ["", links, ""] + lines[i+1:]
-    # 3. Если не нашли и это, просто добавить в конец блока токена
-    return lines + ["", links, ""]
+            return lines[:i+1] + [links] + lines[i+1:]
+    return lines + [links]
 
 def clean_message(text):
     lines = text.splitlines()
@@ -52,7 +50,7 @@ def clean_message(text):
     ]
     # Удаляем проценты 1H ... 12H ... 24H ...
     lines = [l for l in lines if not (("1H:" in l and "12H:" in l and "24H:" in l) or any(spat in l for spat in skip_patterns))]
-    # Оставляем только одну пустую строку подряд
+    # Только по одной пустой строке подряд
     prev_empty = False
     compact_lines = []
     for l in lines:
@@ -69,31 +67,38 @@ def clean_message(text):
     end_idx = next((i for i, l in enumerate(lines) if "Smart Money Transactions:" in l), len(lines))
     token_block = lines[start_idx:end_idx]
     token_block = [l.replace("✂", "") for l in token_block]
-    # Пустая строка после названия и CA (CA — моноширинный)
+    # Вставляем пустую строку после названия и CA (CA — моноширинный)
     if len(token_block) >= 2:
-        token_block = [token_block[0], "", f"`{token_block[1].strip()}`", ""] + token_block[2:]
+        token_block = [token_block[0], "", f"`{token_block[1].strip()}`"] + token_block[2:]
     token_address = extract_token_address(token_block)
     if token_address:
         token_block = insert_links(token_block, token_address)
+    # Только по одной пустой строке подряд (ещё раз после вставки ссылок)
+    prev_empty = False
+    cleaned_token_block = []
+    for l in token_block:
+        if l.strip() == "":
+            if not prev_empty:
+                cleaned_token_block.append("")
+            prev_empty = True
+        else:
+            cleaned_token_block.append(l)
+            prev_empty = False
+    result = cleaned_token_block
     # Smart Money Transactions
-    result = token_block
     smt_idx = next((i for i, l in enumerate(lines) if "Smart Money Transactions:" in l), None)
     if smt_idx is not None:
         smt_block = lines[smt_idx:]
         formatted_smt = []
         for l in smt_block:
-            tx_url = re.search(r'\[View Tx\]\s*(https?://[^\s\)]+)', l)
+            # Markdown View Tx: ищем [View Tx] и ссылку справа (или в скобках)
+            tx_url = re.search(r'\[View Tx\][^\(]*\(?\s*(https?://[^\s\)]+)\)?', l)
             if tx_url:
                 url = tx_url.group(1)
-                l = re.sub(r'\[View Tx\]\s*https?://[^\s\)]+', f'[View Tx]({url})', l)
-            else:
-                m2 = re.search(r'(https?://[^\s\)]+)', l)
-                if m2:
-                    url = m2.group(1)
-                    l = l.replace('[View Tx]', f'[View Tx]({url})')
+                l = re.sub(r'\[View Tx\][^\(]*\(?\s*https?://[^\s\)]+\)?', f'[View Tx]({url})', l)
             formatted_smt.append(l.replace('✂', '').strip())
         result += formatted_smt
-    # Убираем пустые строки в конце
+    # В конце — не больше одной пустой строки
     while result and result[-1] == "":
         result.pop()
     return '\n'.join(result).strip()
