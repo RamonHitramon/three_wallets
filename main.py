@@ -30,7 +30,6 @@ def insert_links(lines, token_address):
 
 def clean_message(text):
     lines = text.splitlines()
-    result = []
     skip_patterns = [
         "Alert Count:",
         "# ",
@@ -45,7 +44,7 @@ def clean_message(text):
         "DexScreener",
         "AXIOM"
     ]
-    # Убираем строки с процентами 1H ... 12H ... 24H ...
+    # Удаляем проценты 1H ... 12H ... 24H ...
     lines = [l for l in lines if not (("1H:" in l and "12H:" in l and "24H:" in l) or any(spat in l for spat in skip_patterns))]
     # Оставляем только одну пустую строку подряд
     prev_empty = False
@@ -59,38 +58,37 @@ def clean_message(text):
             compact_lines.append(l)
             prev_empty = False
     lines = compact_lines
-    # Найти начало блока (строка с ➡)
+    # Блок токена
     start_idx = next((i for i, l in enumerate(lines) if l.strip().startswith('➡')), 0)
     end_idx = next((i for i, l in enumerate(lines) if "Smart Money Transactions:" in l), len(lines))
     token_block = lines[start_idx:end_idx]
-    # Удаляем ✂
     token_block = [l.replace("✂", "") for l in token_block]
-    # Добавить пустую строку после токена и CA, CA — моноширинный!
+    # Пустая строка после названия и CA (CA — моноширинный)
     if len(token_block) >= 2:
-        token_block = [token_block[0], f"`{token_block[1].strip()}`", ""] + token_block[2:]
+        token_block = [token_block[0], "", f"`{token_block[1].strip()}`", ""] + token_block[2:]
     token_address = extract_token_address(token_block)
-    # Вставить блок ссылок
     if token_address:
         token_block = insert_links(token_block, token_address)
-    result += token_block
-    # Smart Money Transactions блок
+    # Добавляем Smart Money Transactions
+    result = token_block
     smt_idx = next((i for i, l in enumerate(lines) if "Smart Money Transactions:" in l), None)
     if smt_idx is not None:
         smt_block = lines[smt_idx:]
-        # Markdown View Tx
-        for idx, l in enumerate(smt_block):
-            tx_url = re.search(r'\[View Tx\]\s*(https?://[^\s\)]+)', l)
+        formatted_smt = []
+        for l in smt_block:
+            # [View Tx] markdown
+            tx_url = re.search(r'$begin:math:display$View Tx$end:math:display$\s*(https?://[^\s\)]+)', l)
             if tx_url:
                 url = tx_url.group(1)
-                l = re.sub(r'\[View Tx\]\s*https?://[^\s\)]+', f'[View Tx]({url})', l)
+                l = re.sub(r'$begin:math:display$View Tx$end:math:display$\s*https?://[^\s\)]+', f'[View Tx]({url})', l)
             else:
                 m2 = re.search(r'(https?://[^\s\)]+)', l)
                 if m2:
                     url = m2.group(1)
                     l = l.replace('[View Tx]', f'[View Tx]({url})')
-            smt_block[idx] = l.replace('✂', '').strip()
-        result += smt_block
-    # Убираем лишние пустые строки в конце
+            formatted_smt.append(l.replace('✂', '').strip())
+        result += formatted_smt
+    # Убираем пустые строки в конце
     while result and result[-1] == "":
         result.pop()
     return '\n'.join(result).strip()
