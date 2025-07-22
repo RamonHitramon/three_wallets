@@ -22,19 +22,16 @@ def extract_token_address(lines):
     return None
 
 def insert_links(lines, token_address):
-    # Каждая ссылка на отдельной строке — всегда работает в Telegram!
-    links = (
-        f"[GMGN](https://gmgn.ai/sol/token/{token_address})\n"
-        f"[DexScreener](https://dexscreener.com/solana/{token_address})\n"
-        f"[AXIOM](https://axiom.trade/t/{token_address}/@3wallets)"
-    )
-    # Вставляем после строки 💧 Total Liquidity или после CA
+    links = f"| [GMGN](https://gmgn.ai/sol/token/{token_address}) | [DexScreener](https://dexscreener.com/solana/{token_address}) | [AXIOM](https://axiom.trade/t/{token_address}/@3wallets) |"
+    # после строки 💧 Total Liquidity (без учёта пробелов)
     for i, line in enumerate(lines):
         if "Total Liquidity" in line:
             return lines[:i+1] + ["", links, ""] + lines[i+1:]
+    # если не нашли — после CA
     for i, line in enumerate(lines):
         if line.startswith("`") and line.endswith("`"):
             return lines[:i+1] + ["", links, ""] + lines[i+1:]
+    # если не нашли — просто в конец
     return lines + ["", links, ""]
 
 def clean_message(text):
@@ -55,7 +52,7 @@ def clean_message(text):
     ]
     # Удаляем проценты 1H ... 12H ... 24H ...
     lines = [l for l in lines if not (("1H:" in l and "12H:" in l and "24H:" in l) or any(spat in l for spat in skip_patterns))]
-    # Оставляем только одну пустую строку подряд
+    # Только по одной пустой строке подряд
     prev_empty = False
     compact_lines = []
     for l in lines:
@@ -72,7 +69,7 @@ def clean_message(text):
     end_idx = next((i for i, l in enumerate(lines) if "Smart Money Transactions:" in l), len(lines))
     token_block = lines[start_idx:end_idx]
     token_block = [l.replace("✂", "") for l in token_block]
-    # Пустая строка после названия и CA (CA — моноширинный)
+    # Вставляем пустую строку после названия и CA (CA — моноширинный)
     if len(token_block) >= 2:
         token_block = [token_block[0], "", f"`{token_block[1].strip()}`", ""] + token_block[2:]
     token_address = extract_token_address(token_block)
