@@ -23,15 +23,14 @@ def extract_token_address(lines):
 
 def insert_links(lines, token_address):
     links = f"| [GMGN](https://gmgn.ai/sol/token/{token_address}) | [DexScreener](https://dexscreener.com/solana/{token_address}) | [AXIOM](https://axiom.trade/t/{token_address}/@3wallets) |"
-    # после строки 💧 Total Liquidity (без учёта пробелов)
+    # После строки Total Liquidity вставляем пустую строку, ссылки и ещё одну пустую строку
     for i, line in enumerate(lines):
         if "Total Liquidity" in line:
             return lines[:i+1] + ["", links, ""] + lines[i+1:]
-    # если не нашли — после CA
+    # Если не нашли — после CA
     for i, line in enumerate(lines):
         if line.startswith("`") and line.endswith("`"):
             return lines[:i+1] + ["", links, ""] + lines[i+1:]
-    # если не нашли — просто в конец
     return lines + ["", links, ""]
 
 def clean_message(text):
@@ -94,10 +93,11 @@ def clean_message(text):
         formatted_smt = []
         for l in smt_block:
             # Markdown View Tx: ищем [View Tx] и ссылку справа (или в скобках)
-            tx_url = re.search(r'\[View Tx\][^\(]*\(?\s*(https?://[^\s\)]+)\)?', l)
-            if tx_url:
-                url = tx_url.group(1)
-                l = re.sub(r'\[View Tx\][^\(]*\(?\s*https?://[^\s\)]+\)?', f'[View Tx]({url})', l)
+            # Пример: ... [View Tx](https://solscan.io/tx/....)
+            m = re.search(r'\[View Tx\][\s\.:]*(https?://[^\s\)]+)', l)
+            if m:
+                url = m.group(1)
+                l = re.sub(r'\[View Tx\][\s\.:]*(https?://[^\s\)]+)', f'[View Tx]({url})', l)
             formatted_smt.append(l.replace('✂', '').strip())
         result += formatted_smt
     # В конце — не больше одной пустой строки
